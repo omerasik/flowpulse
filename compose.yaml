@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: flowpulse
+      POSTGRES_PASSWORD: ${FLOWPULSE_DB_PASSWORD:?Set FLOWPULSE_DB_PASSWORD in .env}
+      POSTGRES_DB: flowpulse
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowpulse -d flowpulse"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - flowpulse-db:/var/lib/postgresql/data
+  app:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://flowpulse:${FLOWPULSE_DB_PASSWORD:?Set FLOWPULSE_DB_PASSWORD in .env}@db:5432/flowpulse
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+volumes:
+  flowpulse-db:
