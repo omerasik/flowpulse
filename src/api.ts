@@ -6,7 +6,8 @@ import type { Settings } from "./settings";
 import type { RunStore } from "./store";
 import { processNext } from "./worker";
 
-const decisionSchema = z.object({ decision: z.enum(["approve", "reject"]) }).strict();
+const decisionSchema = z.object({ decision: z.enum(["approve", "reject"]), target: z.string().max(512).optional() }).strict();
+const operationSchema = z.object({ operation: z.enum(["retry", "cancel"]) }).strict();
 
 function json(payload: unknown, status = 200) {
   return Response.json(payload, { status, headers: { "Cache-Control": "no-store" } });
@@ -75,23 +76,33 @@ export function createApi({ store, settings, clock = () => new Date() }: Depende
 
       if (method === "POST" && path === "/api/worker/tick") {
         requireToken(request, config.workerToken);
-        return json(await processNext(await store(), config.classify, clock));
+        const runs = await store();
+        return json(await processNext(runs, config.classify, clock, config.connectorFor?.(runs)));
       }
 
       if (method === "GET" && path === "/api/runs") {
         requireToken(request, config.operatorToken);
-        return json({ runs: await (await store()).list(), demo: config.demo, provider: config.provider });
+        return json({ runs: await (await store()).list(), demo: config.demo, provider: config.provider, actionTarget: config.actionTarget });
       }
 
-      const runPath = /^\/api\/runs\/([^/]+)(\/decision)?$/.exec(path);
+      const runPath = /^\/api\/runs\/([^/]+)(?:\/(decision|operation))?$/.exec(path);
       if (runPath && ((method === "GET" && !runPath[2]) || (method === "POST" && runPath[2]))) {
         requireToken(request, config.operatorToken);
         const id = z.uuid().safeParse(runPath[1]);
         if (!id.success) throw new AppError(404, "run_not_found");
         if (method === "GET") return json(await (await store()).get(id.data));
-        const decision = decisionSchema.safeParse(parseJson(await readBytes(request, 384)));
+        const body = parseJson(await readBytes(request, 1024));
+        if (runPath[2] === "operation") {
+          const input = operationSchema.safeParse(body);
+          if (!input.success) throw new AppError(422, "invalid_operation");
+          return json(await (await store()).operate(id.data, input.data.operation, clock()));
+        }
+        const decision = decisionSchema.safeParse(body);
         if (!decision.success) throw new AppError(422, "invalid_decision");
-        return json(await (await store()).decide(id.data, decision.data.decision, clock()));
+        if (decision.data.decision === "approve" && decision.data.target !== config.actionTarget) {
+          throw new AppError(409, "approval_target_changed");
+        }
+        return json(await (await store()).decide(id.data, decision.data.decision, clock(), config.actionTarget));
       }
 
       if (config.demo && method === "POST" && path === "/api/demo/sample") {
@@ -107,7 +118,8 @@ export function createApi({ store, settings, clock = () => new Date() }: Depende
 
       if (config.demo && method === "POST" && path === "/api/demo/tick") {
         requireToken(request, config.operatorToken);
-        return json(await processNext(await store(), config.classify, clock));
+        const runs = await store();
+        return json(await processNext(runs, config.classify, clock, config.connectorFor?.(runs)));
       }
 
       throw new AppError(404, "route_not_found");

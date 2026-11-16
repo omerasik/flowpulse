@@ -6,11 +6,11 @@ import { runMessages } from "../src/domain";
 import type { Run, Status } from "../src/domain";
 
 type Filter = "all" | "approval" | "failed";
-type Snapshot = { runs: Run[]; demo: boolean; provider: string };
+type Snapshot = { runs: Run[]; demo: boolean; provider: string; actionTarget?: string };
 
 const statusLabels: Record<Status, string> = {
   queued: "Queued", running: "Running", retrying: "Retry scheduled",
-  awaiting_approval: "Awaiting approval", completed: "Completed", rejected: "Rejected", failed: "Failed"
+  awaiting_approval: "Awaiting approval", completed: "Completed", rejected: "Rejected", failed: "Failed", cancelled: "Cancelled"
 };
 const filterItems: { id: Filter; label: string; symbol: string }[] = [
   { id: "all", label: "All runs", symbol: "≋" },
@@ -25,7 +25,7 @@ function StatusPill({ status }: { status: Status }) {
   return <span className={"status " + status}><i aria-hidden="true" />{statusLabels[status]}</span>;
 }
 
-async function api<T>(path: string, token: string, body?: { decision: string } | null, signal?: AbortSignal): Promise<T> {
+async function api<T>(path: string, token: string, body?: Record<string, string | undefined> | null, signal?: AbortSignal): Promise<T> {
   const response = await fetch("/api/" + path, {
     method: body === undefined ? "GET" : "POST",
     signal,
@@ -33,7 +33,7 @@ async function api<T>(path: string, token: string, body?: { decision: string } |
     ...(body ? { body: JSON.stringify(body) } : {})
   });
   if (response.status === 401) throw new Error("Access denied. Check your operator token.");
-  if (response.status === 409) throw new Error("This run has already been reviewed or is waiting for processing.");
+  if (response.status === 409) throw new Error("The run or delivery destination changed. Refresh and check its current state.");
   if (!response.ok) throw new Error("The request failed. Try again.");
   return response.json();
 }
@@ -43,6 +43,7 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
   const [credential, setCredential] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [error, setError] = useState("");
   const [action, setAction] = useState("");
@@ -77,7 +78,12 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
   }, [action, refresh, token]);
 
   const runs = snapshot?.runs ?? [];
-  const visible = runs.filter(run => filter === "all" || run.status === (filter === "approval" ? "awaiting_approval" : "failed"));
+  const query = search.trim().toLowerCase();
+  const visible = runs.filter(run =>
+    (filter === "all" || run.status === (filter === "approval" ? "awaiting_approval" : "failed")) &&
+    `${run.subject} ${run.event_id}`.toLowerCase().includes(query));
+  const pricedRuns = runs.flatMap(run => run.classifier_telemetry?.estimatedUsd ?? []);
+  const recentCost = pricedRuns.reduce((total, cost) => total + cost, 0);
   const selected = visible.find(run => run.id === selectedId) ?? visible[0];
   const pending = runs.filter(run => run.status === "awaiting_approval").length;
   const failures = runs.filter(run => run.status === "failed").length;
@@ -94,6 +100,7 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
     setToken("");
     setSnapshot(null);
     setSelectedId("");
+    setSearch("");
     setError("");
   }
 
@@ -113,6 +120,7 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
   async function sample() {
     const { id } = await api<{ id: string }>("demo/sample", token, null);
     setFilter("all");
+    setSearch("");
     setSelectedId(id);
     for (let attempt = 0; attempt < 12; attempt += 1) {
       await api("demo/tick", token, null);
@@ -175,10 +183,12 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
                 {target && <button className="metric-link" onClick={() => setFilter(target as Filter)} aria-label={"View " + String(label).toLowerCase()}>↗</button>}
               </div>)}
           </div>
+          {pricedRuns.length > 0 && <p>Estimated model cost for {pricedRuns.length} recent runs: ${recentCost.toFixed(6)}</p>}
           <div className="work-area">
             <section className="panel" aria-label="Runs">
               <header className="panel-header"><div><h2>{filter === "all" ? "Recent runs" : filter === "approval" ? "Approval queue" : "Failed runs"}</h2><p>Newest events first · UTC</p></div><span className="panel-count">{visible.length}</span></header>
-              {visible.length === 0 ? <div className="empty"><span aria-hidden="true">≋</span><h3>{filter === "all" ? "No events yet" : filter === "approval" ? "No drafts to review" : "No failed runs"}</h3>
+              <div className="run-search"><label htmlFor="run-search">Search runs</label><input id="run-search" type="search" placeholder="Subject or event ID" value={search} onChange={event => setSearch(event.target.value)} /></div>
+              {query && visible.length === 0 ? <p className="empty" role="status">No runs match your search.</p> : visible.length === 0 ? <div className="empty"><span aria-hidden="true">≋</span><h3>{filter === "all" ? "No events yet" : filter === "approval" ? "No drafts to review" : "No failed runs"}</h3>
                 <p>{filter === "all" && snapshot.demo ? "Run a sample to see intake, retry and approval in one workflow." : "Incoming runs appear here automatically."}</p></div> :
                 <div className="table-scroll"><table>
                   <thead><tr><th scope="col">Event</th><th scope="col">Status</th><th scope="col" className="attempts">Attempts</th><th scope="col">Received</th></tr></thead>
@@ -197,15 +207,32 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
               {!selected ? <div className="empty detail-empty"><span aria-hidden="true">◇</span><p>Select a run to inspect its details.</p></div> :
                 <div className="details">
                   <div className="run-heading"><StatusPill status={selected.status} /><h3>{selected.subject}</h3></div>
+                  {selected.action_target && <p className="delivery-target">Delivery destination <strong>{selected.action_target}</strong></p>}
                   {selected.error_code && <div className="error-detail"><strong>{selected.status === "retrying" ? "Retry scheduled" : "Execution error"}</strong><code>{selected.error_code}</code>{selected.status === "retrying" && <small>Eligible at {time.format(new Date(selected.available_at))} UTC</small>}</div>}
                   {selected.classification && <dl className="classification">
                     <div><dt>Category</dt><dd>{selected.classification.category}</dd></div>
                     <div><dt>Priority</dt><dd>{selected.classification.priority}</dd></div>
+                    {selected.classification.team && <div><dt>Suggested team</dt><dd>{selected.classification.team}</dd></div>}
+                  </dl>}
+                  {selected.classifier_telemetry && <dl className="classification" aria-label="Model usage">
+                    <div><dt>Model</dt><dd>{selected.classifier_telemetry.model}</dd></div>
+                    <div><dt>Response time</dt><dd>{selected.classifier_telemetry.latencyMs} ms</dd></div>
+                    {selected.classifier_telemetry.inputTokens !== undefined && <div><dt>Tokens in / out</dt><dd>{selected.classifier_telemetry.inputTokens} / {selected.classifier_telemetry.outputTokens}</dd></div>}
+                    {selected.classifier_telemetry.estimatedUsd !== undefined && <div><dt>Estimated cost</dt><dd>${selected.classifier_telemetry.estimatedUsd.toFixed(6)}</dd></div>}
                   </dl>}
                   {selected.draft && <div className="draft"><h4>Notification draft</h4><pre>{selected.draft}</pre></div>}
-                  {selected.status === "awaiting_approval" && <div className="review-actions">
-                    <button className="secondary" disabled={!!action} onClick={() => void invoke("Rejecting", async () => { await api("runs/" + selected.id + "/decision", token, { decision: "reject" }); })}>Reject</button>
-                    <button className="primary" disabled={!!action} onClick={() => void invoke("Approving", async () => { await api("runs/" + selected.id + "/decision", token, { decision: "approve" }); })}>Approve draft</button>
+                  {selected.status === "awaiting_approval" && <>
+                    {snapshot.actionTarget && <p className="delivery-target">Delivery destination <strong>{snapshot.actionTarget}</strong></p>}
+                    <div className="review-actions">
+                      <button className="secondary" disabled={!!action} onClick={() => void invoke("Rejecting", async () => { await api("runs/" + selected.id + "/decision", token, { decision: "reject" }); })}>Reject</button>
+                      <button className="primary" disabled={!!action} onClick={() => void invoke("Approving", async () => { await api("runs/" + selected.id + "/decision", token, { decision: "approve", target: snapshot.actionTarget }); })}>{snapshot.actionTarget ? "Approve delivery" : "Approve draft"}</button>
+                    </div>
+                  </>}
+                  {selected.status === "failed" && selected.manual_retries < 3 && <div className="review-actions">
+                    <button className="secondary" disabled={!!action} onClick={() => void invoke("Retrying", async () => { await api("runs/" + selected.id + "/operation", token, { operation: "retry" }); })}>Retry failed step</button>
+                  </div>}
+                  {["queued", "retrying", "awaiting_approval"].includes(selected.status) && <div className="review-actions">
+                    <button className="secondary" disabled={!!action} onClick={() => void invoke("Cancelling", async () => { await api("runs/" + selected.id + "/operation", token, { operation: "cancel" }); })}>Cancel pending work</button>
                   </div>}
                   <div className="trace"><h4>Execution trace</h4><ol>
                     {selected.trace.map((entry, index) => <li key={index}><span>{runMessages[entry.step]}</span>

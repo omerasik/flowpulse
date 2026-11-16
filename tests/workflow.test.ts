@@ -7,6 +7,7 @@ import { createApi } from "../src/api";
 import { signWebhook } from "../src/auth";
 import { openDatabase } from "../src/database";
 import type { Database } from "../src/database";
+import { DeliveryError, webhookConnector } from "../src/connector";
 import { leaseMs, maxAttempts } from "../src/domain";
 import type { Run } from "../src/domain";
 import { readSettings } from "../src/settings";
@@ -116,6 +117,94 @@ test("retries a transient provider error and records an approval once", async ()
   assert.equal(final.attempts, 2);
   assert.deepEqual(final.trace.map(entry => entry.step),
     ["accepted", "claimed", "retry_scheduled", "claimed", "draft_ready", "approved"]);
+});
+
+test("persists proposed routing and model telemetry through the worker and operator API", async () => {
+  const { id } = await store.enqueue(event("model"), clock());
+  const telemetry = { provider: "openai" as const, model: "test-model", latencyMs: 12, inputTokens: 120, outputTokens: 14 };
+  await processNext(store, async () => ({
+    category: "billing", priority: "high", rationale: "Payment portal unavailable.",
+    team: "technical support", nextAction: "Check portal availability.", telemetry
+  }), clock);
+  const result = await run(id);
+  assert.equal(result.status, "awaiting_approval");
+  assert.equal(result.classification?.team, "technical support");
+  assert.deepEqual(result.classifier_telemetry, telemetry);
+  assert.match(result.draft ?? "", /Route to: technical support/);
+  assert.match(result.draft ?? "", /Check portal availability/);
+});
+
+test("queues approved delivery once, recovers a lost acknowledgement and records one receipt", async () => {
+  const demoSettings = readSettings({ DEMO_MODE: "true", ACTION_CONNECTOR: "local" });
+  const local = demoSettings.connectorFor?.(store);
+  assert.ok(local);
+  let count = 0;
+  const connector = { ...local, async send(notice: Parameters<typeof local.send>[0]) {
+    await local.send(notice);
+    if (++count === 1) throw new DeliveryError("delivery_unreachable", true);
+  } };
+  const deliveryApi = createApi({ store: async () => store, clock, settings: () => ({
+    ...settings, actionTarget: connector.target, connectorFor: () => connector
+  }) });
+  const receipt = await webhook(JSON.stringify(event("approval-delivery")));
+  const { id } = await receipt.json();
+  const call = (path: string, token: string, body?: object) => deliveryApi(new Request("http://localhost/api/" + path, {
+    method: "POST",
+    headers: { ...auth(token), "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined
+  }));
+  const deliveryTick = () => call("worker/tick", settings.workerToken);
+  const approve = (target: string) => call("runs/" + id + "/decision", settings.operatorToken, { decision: "approve", target });
+  assert.equal((await (await deliveryTick()).json()).status, "awaiting_approval");
+  assert.equal((await (await deliveryTick()).json()).status, "idle");
+  assert.equal(count, 0);
+  assert.equal((await approve("A different destination")).status, 409);
+  const decisions = await Promise.all([approve(connector.target), approve(connector.target)]);
+  assert.ok(decisions.every(response => response.status === 200));
+  assert.equal((await (await deliveryTick()).json()).status, "retrying");
+  milliseconds += 2_000;
+  const results = await Promise.all([deliveryTick(), deliveryTick()]);
+  const states = await Promise.all(results.map(async response => (await response.json()).status));
+  assert.deepEqual(states.sort(), ["completed", "idle"]);
+  assert.equal(count, 2);
+  const deliveries = await database.query("SELECT run_id FROM local_deliveries WHERE run_id = $1", [id]);
+  assert.equal(deliveries.length, 1);
+  assert.deepEqual((await run(id)).trace.map(item => item.step), [
+    "accepted", "claimed", "draft_ready", "approved", "delivery_claimed",
+    "delivery_retry_scheduled", "delivery_claimed", "delivered"
+  ]);
+  assert.equal((await approve(connector.target)).status, 200);
+});
+
+test("can requeue a failed step and cancel pending work without losing the audit trail", async () => {
+  const { id } = await store.enqueue(event("operator-control"), clock());
+  await processNext(store, async () => { throw new ClassificationError("provider_rejected", false); }, clock);
+  const operate = (operation: string, token = settings.operatorToken) => request("runs/" + id + "/operation", {
+    method: "POST", headers: { ...auth(token), "Content-Type": "application/json" }, body: JSON.stringify({ operation })
+  });
+  assert.equal((await operate("retry", settings.workerToken)).status, 401);
+  assert.equal((await operate("retry")).status, 200);
+  assert.equal((await operate("retry")).status, 409);
+  assert.equal((await operate("cancel")).status, 200);
+  assert.equal((await operate("cancel")).status, 200);
+  assert.equal((await (await tick()).json()).status, "idle");
+  assert.deepEqual((await run(id)).trace.map(item => item.step), ["accepted", "claimed", "classification_failed", "manual_retry", "cancelled"]);
+});
+
+test("uses the configured destination and run-scoped key for webhook delivery", async () => {
+  const endpoint = "https://notifications.example.test/inbound";
+  const notice = { id: "stable-run-id", draft: "Approved notification" };
+  const connector = webhookConnector(endpoint, "local-test-token", async (url, options) => {
+    assert.equal(url, endpoint);
+    assert.equal(options?.redirect, "error");
+    assert.ok(options?.signal);
+    const headers = new Headers(options?.headers);
+    assert.equal(headers.get("authorization"), "Bearer local-test-token");
+    assert.equal(headers.get("idempotency-key"), notice.id);
+    assert.deepEqual(JSON.parse(String(options?.body)), { runId: notice.id, message: notice.draft });
+    return new Response(null, { status: 204 });
+  });
+  await connector.send(notice);
 });
 
 test("requires role-specific tokens and disables demo routes in deploy mode", async () => {

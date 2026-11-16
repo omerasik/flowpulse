@@ -46,10 +46,19 @@ try {
   }
   if (run?.status !== "awaiting_approval") throw new Error("Timed out waiting for the draft.");
   if (process.argv.includes("--approve")) {
+    const { actionTarget } = await call("runs", { token: operator });
+    if (actionTarget && actionTarget !== "Local delivery inbox") throw new Error("Use the operator dashboard to approve an external delivery.");
     run = await call("runs/" + event.id + "/decision", {
       method: "POST", token: operator, headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision: "approve" })
+      body: JSON.stringify({ decision: "approve", target: actionTarget })
     });
+    for (let attempt = 0; run.status !== "completed" && attempt < 15; attempt += 1) {
+      await call("worker/tick", { method: "POST", token: worker });
+      run = await call("runs/" + event.id, { token: operator });
+      if (run.status === "failed") throw new Error(run.error_code ?? "delivery_failed");
+      if (run.status !== "completed") await delay(550);
+    }
+    if (run.status !== "completed") throw new Error("Timed out waiting for delivery.");
   }
   console.log(JSON.stringify({ url: base, run }, null, 2));
 } catch (error) {

@@ -30,6 +30,26 @@ CREATE TABLE IF NOT EXISTS runs (
   updated_at timestamptz NOT NULL,
   CHECK ((status = 'running') = (lease_until IS NOT NULL AND lease_token IS NOT NULL))
 );
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS classifier_telemetry jsonb;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS stage text NOT NULL DEFAULT 'classify'
+  CHECK (stage IN ('classify', 'deliver'));
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS action_target text;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS manual_retries integer NOT NULL DEFAULT 0
+  CHECK (manual_retries BETWEEN 0 AND 3);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'runs'::regclass AND conname = 'runs_workflow_status_check') THEN
+    ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_status_check;
+    ALTER TABLE runs ADD CONSTRAINT runs_workflow_status_check CHECK (status IN (
+      'queued', 'running', 'retrying', 'awaiting_approval', 'completed', 'rejected', 'failed', 'cancelled'
+    ));
+  END IF;
+END $$;
+CREATE TABLE IF NOT EXISTS local_deliveries (
+  run_id uuid PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+  draft text NOT NULL,
+  delivered_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE INDEX IF NOT EXISTS runs_ready_idx ON runs (available_at, created_at, id)
   WHERE status IN ('queued', 'retrying');
 CREATE INDEX IF NOT EXISTS runs_lease_idx ON runs (lease_until)
