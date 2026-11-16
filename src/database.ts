@@ -39,7 +39,7 @@ CREATE INDEX IF NOT EXISTS runs_recent_idx ON runs (created_at DESC, id DESC);
 
 export async function openDatabase({ url, path = "memory://" }: { url?: string; path?: string } = {}): Promise<Database> {
   if (!url) {
-    if (path !== "memory://") await mkdir(dirname(resolve(path)), { recursive: true });
+    if (path !== "memory://") await mkdir(/* turbopackIgnore: true */ dirname(resolve(path)), { recursive: true });
     const embedded = await PGlite.create(path);
     try {
       await embedded.exec(schema);
