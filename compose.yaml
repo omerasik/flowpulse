@@ -22,5 +22,40 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      FLOWPULSE_URL: http://127.0.0.1:3000
+    network_mode: service:app
+    command: ["node", "scripts/worker.mjs"]
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+  receiver:
+    profiles: [receiver]
+    build: .
+    env_file: .env
+    network_mode: service:app
+    command: ["node", "scripts/receiver.mjs", "--drop-first-ack"]
+    volumes:
+      - flowpulse-receiver:/app/data
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3111/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
 volumes:
   flowpulse-db:
+  flowpulse-receiver:

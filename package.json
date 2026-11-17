@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings .",
     "demo": "node --env-file-if-exists=.env scripts/demo.mjs",
-    "worker": "node --env-file-if-exists=.env scripts/worker.mjs"
+    "worker": "node --env-file-if-exists=.env scripts/worker.mjs",
+    "receiver": "node --env-file-if-exists=.env scripts/receiver.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.16",

@@ -13,6 +13,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && mkdir data && chown node:node data
 COPY --from=build /app/.next .next
 COPY next.config.ts ./
+COPY scripts/ scripts/
 USER node
 EXPOSE 3000
 CMD ["./node_modules/.bin/next", "start", "--hostname", "0.0.0.0"]

@@ -42,3 +42,15 @@ jobs:
           TEST_DATABASE_URL: postgresql://flowpulse_ci:ephemeral-ci-only@127.0.0.1:5432/flowpulse_ci
       - run: npm run build
       - run: npm audit --audit-level=moderate
+      - name: Configure isolated Compose demo
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          Path('.env').write_text('DEMO_MODE=true\nAI_PROVIDER=rules\nACTION_CONNECTOR=webhook\nACTION_WEBHOOK_URL=http://127.0.0.1:3111/notify\nACTION_WEBHOOK_TOKEN=flowpulse-local-receiver-credential\nFLOWPULSE_DB_PASSWORD=ci-disposable-database-password\n')
+          PY
+      - run: docker compose --profile receiver up --build --wait
+      - run: node scripts/demo.mjs --approve --approve-local-receiver --background
+      - if: failure()
+        run: docker compose --profile receiver logs --tail=100
+      - if: always()
+        run: docker compose --profile receiver down -v
