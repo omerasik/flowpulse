@@ -5,6 +5,7 @@ const base = process.env.FLOWPULSE_URL ?? "http://127.0.0.1:3000";
 const operator = process.env.OPERATOR_TOKEN ?? "flowpulse-local-demo";
 const worker = process.env.WORKER_TOKEN ?? "flowpulse-local-worker";
 const secret = process.env.WEBHOOK_SECRET ?? "flowpulse-local-webhook";
+const background = process.argv.includes("--background");
 
 async function call(path, { token, headers, ...options } = {}) {
   const response = await fetch(new URL("/api/" + path, base), {
@@ -37,8 +38,8 @@ try {
     }
   });
   let run;
-  for (let attempt = 0; attempt < 15; attempt += 1) {
-    await call("worker/tick", { method: "POST", token: worker });
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    if (!background) await call("worker/tick", { method: "POST", token: worker });
     run = await call("runs/" + event.id, { token: operator });
     if (run.status === "awaiting_approval") break;
     if (run.status === "failed") throw new Error(run.error_code ?? "workflow_failed");
@@ -47,13 +48,19 @@ try {
   if (run?.status !== "awaiting_approval") throw new Error("Timed out waiting for the draft.");
   if (process.argv.includes("--approve")) {
     const { actionTarget } = await call("runs", { token: operator });
-    if (actionTarget && actionTarget !== "Local delivery inbox") throw new Error("Use the operator dashboard to approve an external delivery.");
+    if (actionTarget && actionTarget !== "Local delivery inbox") {
+      const receiver = new URL(actionTarget);
+      if (!process.argv.includes("--approve-local-receiver") || receiver.protocol !== "http:" ||
+        !["127.0.0.1", "[::1]"].includes(receiver.hostname)) {
+        throw new Error("Use the operator dashboard to approve an external delivery.");
+      }
+    }
     run = await call("runs/" + event.id + "/decision", {
       method: "POST", token: operator, headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ decision: "approve", target: actionTarget })
     });
-    for (let attempt = 0; run.status !== "completed" && attempt < 15; attempt += 1) {
-      await call("worker/tick", { method: "POST", token: worker });
+    for (let attempt = 0; run.status !== "completed" && attempt < 60; attempt += 1) {
+      if (!background) await call("worker/tick", { method: "POST", token: worker });
       run = await call("runs/" + event.id, { token: operator });
       if (run.status === "failed") throw new Error(run.error_code ?? "delivery_failed");
       if (run.status !== "completed") await delay(550);

@@ -70,7 +70,7 @@ Send it as `application/json` with `X-FlowPulse-Timestamp` set to Unix time in s
 | `FLOWPULSE_URL` | Base app URL for the worker, demo script and hosted scheduler. |
 | `TRIGGER_PROJECT_REF` | Trigger.dev project reference for task deployment. |
 
-To use Docker Compose, copy the env example and add a URL-safe random `FLOWPULSE_DB_PASSWORD`. Run `docker compose up --build`. The service binds to loopback and uses a persistent PostgreSQL volume. Run the local poller separately or configure the scheduler.
+To use Docker Compose, copy the env example and add a URL-safe random `FLOWPULSE_DB_PASSWORD`. Run `docker compose up --build --wait`. The app binds to loopback, uses a persistent PostgreSQL volume, and starts a worker after its health check passes. The worker shares the app's network namespace and calls its loopback API. Stop with `docker compose down`; named data volumes remain available for the next start.
 
 For Trigger.dev, deploy the app behind HTTPS and set `WORKER_TOKEN` and `FLOWPULSE_URL` in the Trigger.dev environment. Set `TRIGGER_PROJECT_REF` for the CLI and deploy the task with `npx trigger.dev@4.8.5 deploy`. The hourly job claims up to 20 eligible runs and uses the same worker endpoint as the local poller. The hosted schedule and the paid model path require user-provided accounts and credentials.
 
@@ -81,6 +81,20 @@ Worker activity reports the last completed poll and cumulative outcomes for the 
 ### Notification receiver
 
 The webhook connector posts `{"runId":"…","message":"…"}` with the configured bearer token. A receiver must store or deduplicate the run's `Idempotency-Key` before acknowledging it. A 2xx response completes the delivery. Network failures, 408, 429 and 5xx trigger bounded retries with the same key. Use an authorized receiver that supports this contract. If a destination configuration changes after approval, the run fails before sending. Restoring that destination allows an operator to retry the same approved step.
+
+The included local HTTP receiver writes receipts to SQLite before acknowledging them and rejects a changed message under an existing key. It binds to `127.0.0.1:3111` and requires `DEMO_MODE=true`. For a real local delivery demonstration, set these values in `.env`:
+
+```dotenv
+DEMO_MODE=true
+AI_PROVIDER=rules
+ACTION_CONNECTOR=webhook
+ACTION_WEBHOOK_URL=http://127.0.0.1:3111/notify
+ACTION_WEBHOOK_TOKEN=flowpulse-local-receiver-credential
+```
+
+Restart the app, run `npm run receiver -- --drop-first-ack` and `npm run worker` in separate terminals, then run `npm run demo -- --approve --approve-local-receiver --background`. The signed event recovers from classification failure, waits for approval, and reaches the receiver. The receiver deliberately loses its first acknowledgement; retry uses the same run key and stores one receipt. The dashboard shows both recovery stages and delivery to the actual URL. Authenticated `GET http://127.0.0.1:3111/inbox` exposes the local receipts. The example receiver credential is public and intended only for this loopback demo.
+
+Alternatively, with a configured `FLOWPULSE_DB_PASSWORD`, use `docker compose --profile receiver up --build --wait` and run the same demo command. The optional receiver profile includes the simulated acknowledgement loss and a persistent receipt volume. HTTP notification destinations are restricted to literal loopback addresses in demo mode; non-demo delivery requires HTTPS. Use a separate delivery credential, distinct from the operator, worker and intake credentials.
 
 ## Verification
 

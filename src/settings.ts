@@ -57,8 +57,9 @@ export function readSettings(env: Record<string, string | undefined> = process.e
   } else if (connector === "webhook") {
     const endpoint = new URL(env.ACTION_WEBHOOK_URL ?? "");
     const token = env.ACTION_WEBHOOK_TOKEN;
-    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash ||
-        endpoint.href.length > 250 || !token || token.length < 32) {
+    const loopbackDemo = demo && endpoint.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(endpoint.hostname);
+    if ((!loopbackDemo && endpoint.protocol !== "https:") || endpoint.username || endpoint.password || endpoint.search || endpoint.hash ||
+        endpoint.href.length > 250 || !token || token.length < 32 || secrets.includes(token)) {
       throw new Error("Invalid notification webhook configuration");
     }
     actionTarget = endpoint.href;
