@@ -60,6 +60,15 @@ h1, h2, h3, h4, p { margin: 0; }
 .panel-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 17px; gap: 12px; }
 .panel-header h2, .login h2 { font-size: 17px; font-weight: 740; letter-spacing: -.025em; }
 .panel-header p { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.run-search { display: grid; gap: 5px; padding: 0 17px 14px; color: var(--muted); font-size: 12px; }
+.run-search input { width: 100%; min-height: 36px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+.worker-activity { margin-bottom: 16px; padding: 14px 17px; font-size: 13px; }
+.worker-activity h2 { font-size: 16px; margin-bottom: 6px; }
+.worker-activity div { display: flex; gap: 6px 16px; flex-wrap: wrap; margin-top: 8px; align-items: baseline; }
+.worker-activity span, .worker-activity p { color: var(--muted); }
+.classification[aria-label="Model usage"] dd { text-transform: none; overflow-wrap: anywhere; }
+.delivery-target { color: var(--muted); font-size: 12px; margin: 0 0 12px; overflow-wrap: anywhere; }
+.delivery-target strong { display: block; color: var(--ink); }
 .panel-count { padding: 4px 8px; border-radius: 6px; color: #365546; background: #edf4ee; font-weight: 700; font-size: 11px; }
 .table-scroll { overflow: auto; }
 table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
