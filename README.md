@@ -94,6 +94,8 @@ npm audit --audit-level=moderate
 
 Tests use an isolated in-memory PostgreSQL instance by default. For the server-mode tests, set `TEST_DATABASE_URL` to a dedicated disposable PostgreSQL database. The test suite clears its `runs` table between cases. GitHub Actions runs the same suite against PostgreSQL 17.
 
+Lint uses Oxlint with TypeScript, React and accessibility correctness checks; `tsc` checks strict types separately. The development dependency chain containing the unpatched `picomatch` advisory [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) was removed rather than suppressing the dependency audit.
+
 ## Scope and original work
 
 FlowPulse supports one event type, a built-in workflow, one shared operator role and a 100-run dashboard snapshot. The HTTPS adapter is covered by protocol tests and needs an authorized receiver for live verification. The paid model and hosted scheduler need separate account configuration. Deploy with TLS, a dedicated database and rate limits at the ingress. The local demo runs without a container daemon or external account.

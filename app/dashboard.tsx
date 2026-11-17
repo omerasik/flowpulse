@@ -167,7 +167,7 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
 
         {error && <p className="alert" role="alert">{error}</p>}
         {!snapshot && <section className="panel login">
-          {token && !error ? <p role="status">Connecting to the workspace…</p> : <form onSubmit={login}>
+          {token && !error ? <output>Connecting to the workspace…</output> : <form onSubmit={login}>
             <h2>Operator access</h2>
             <label htmlFor="operator-token">Operator token</label>
             <input id="operator-token" type="password" value={credential} onChange={event => setCredential(event.target.value)} autoComplete="off" required />
@@ -196,7 +196,7 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
             <section className="panel" aria-label="Runs">
               <header className="panel-header"><div><h2>{filter === "all" ? "Recent runs" : filter === "approval" ? "Approval queue" : "Failed runs"}</h2><p>Newest events first · UTC</p></div><span className="panel-count">{visible.length}</span></header>
               <div className="run-search"><label htmlFor="run-search">Search runs</label><input id="run-search" type="search" placeholder="Subject or event ID" value={search} onChange={event => setSearch(event.target.value)} /></div>
-              {query && visible.length === 0 ? <p className="empty" role="status">No runs match your search.</p> : visible.length === 0 ? <div className="empty"><span aria-hidden="true">≋</span><h3>{filter === "all" ? "No events yet" : filter === "approval" ? "No drafts to review" : "No failed runs"}</h3>
+              {query && visible.length === 0 ? <output className="empty">No runs match your search.</output> : visible.length === 0 ? <div className="empty"><span aria-hidden="true">≋</span><h3>{filter === "all" ? "No events yet" : filter === "approval" ? "No drafts to review" : "No failed runs"}</h3>
                 <p>{filter === "all" && snapshot.demo ? "Run a sample to see intake, retry and approval in one workflow." : "Incoming runs appear here automatically."}</p></div> :
                 <div className="table-scroll"><table>
                   <thead><tr><th scope="col">Event</th><th scope="col">Status</th><th scope="col" className="attempts">Attempts</th><th scope="col">Received</th></tr></thead>
