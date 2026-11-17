@@ -68,6 +68,8 @@ before(async () => {
 beforeEach(async () => {
   milliseconds = Date.parse("2026-11-16T10:00:00Z");
   await database.query("DELETE FROM runs");
+  await database.query("DELETE FROM worker_activity");
+  await database.query("DELETE FROM webhook_quota");
 });
 after(async () => database?.close());
 
@@ -92,6 +94,39 @@ test("replays one event idempotently and rejects a changed payload for that ID",
   assert.equal(new Set(receipts.map(receipt => receipt.id)).size, 1);
   assert.equal((await webhook(JSON.stringify({ ...event(), subject: "Changed subject" }))).status, 409);
   assert.equal((await store.list()).length, 1);
+});
+
+test("coordinates the signed webhook quota across concurrent requests and resets next minute", async () => {
+  const limited = createApi({ store: async () => store, clock, settings: () => ({ ...settings, webhookRequests: 2 }) });
+  const post = (id: string, signed = true) => {
+    const body = JSON.stringify(event(id));
+    const timestamp = Math.floor(milliseconds / 1000).toString();
+    return limited(new Request("http://localhost/api/events", {
+      method: "POST", body, headers: { "Content-Type": "application/json", "X-FlowPulse-Timestamp": timestamp,
+        "X-FlowPulse-Signature": signWebhook(signed ? settings.webhookSecret : "invalid", timestamp, Buffer.from(body)) }
+    }));
+  };
+  assert.equal((await post("invalid-one", false)).status, 401);
+  const results = await Promise.all([post("quota-a"), post("quota-b"), post("quota-c")]);
+  assert.deepEqual(results.map(result => result.status).sort(), [202, 202, 429]);
+  assert.equal(results.find(result => result.status === 429)?.headers.get("retry-after"), "60");
+  assert.equal((await store.list()).length, 2);
+  milliseconds += 60_000;
+  assert.equal((await post("quota-next-minute")).status, 202);
+});
+
+test("reports persisted worker activity for idle, retried and finished steps", async () => {
+  await tick();
+  await webhook(JSON.stringify(event("retry")));
+  await tick();
+  milliseconds += 2_000;
+  await tick();
+  const response = await request("runs", { headers: auth(settings.operatorToken) });
+  const { activity } = await response.json();
+  assert.deepEqual(activity, [{
+    source: "worker", last_tick_at: clock().toISOString(), last_work_at: clock().toISOString(),
+    ticks: 3, idle_ticks: 1, finished_steps: 1, retrying_steps: 1, failed_steps: 0
+  }]);
 });
 
 test("retries a transient provider error and records an approval once", async () => {

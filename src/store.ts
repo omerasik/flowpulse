@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { AppError, leaseMs, maxAttempts } from "./domain";
-import type { Classification, ClassifierTelemetry, ReviewDecision, Run, RunOperation, Status, SupportEvent, TraceEntry, WorkflowStage } from "./domain";
+import type {
+  Classification, ClassifierTelemetry, ReviewDecision, Run, RunOperation, Status, SupportEvent,
+  TraceEntry, WorkerActivity, WorkerOutcome, WorkerSource, WorkflowStage
+} from "./domain";
 import type { Notification } from "./connector";
 import type { Database } from "./database";
 
@@ -23,6 +26,44 @@ export type Job = {
 
 export class RunStore {
   constructor(private readonly db: Database) {}
+
+  async admitWebhook(now: Date, limit: number) {
+    const minute = Math.floor(now.getTime() / 60_000);
+    const [accepted] = await this.db.query<{ id: number }>(`
+      INSERT INTO webhook_quota(id, minute, requests) VALUES (1, $1, 1)
+      ON CONFLICT (id) DO UPDATE SET minute = GREATEST(webhook_quota.minute, EXCLUDED.minute),
+        requests = CASE WHEN webhook_quota.minute < EXCLUDED.minute THEN 1 ELSE webhook_quota.requests + 1 END
+      WHERE webhook_quota.minute < EXCLUDED.minute OR webhook_quota.requests < $2
+      RETURNING id
+    `, [minute, limit]);
+    if (!accepted) throw new AppError(429, "webhook_rate_limited", Math.ceil(((minute + 1) * 60_000 - now.getTime()) / 1000));
+  }
+
+  async recordTick(source: WorkerSource, outcome: WorkerOutcome, now: Date) {
+    const idle = outcome === "idle";
+    const finished = outcome === "awaiting_approval" || outcome === "completed";
+    await this.db.query(`
+      INSERT INTO worker_activity VALUES ($1, $2, $3, 1, $4, $5, $6, $7)
+      ON CONFLICT (source) DO UPDATE SET
+        last_tick_at = GREATEST(worker_activity.last_tick_at, EXCLUDED.last_tick_at),
+        last_work_at = GREATEST(worker_activity.last_work_at, EXCLUDED.last_work_at),
+        ticks = worker_activity.ticks + 1,
+        idle_ticks = worker_activity.idle_ticks + EXCLUDED.idle_ticks,
+        finished_steps = worker_activity.finished_steps + EXCLUDED.finished_steps,
+        retrying_steps = worker_activity.retrying_steps + EXCLUDED.retrying_steps,
+        failed_steps = worker_activity.failed_steps + EXCLUDED.failed_steps
+    `, [source, now.toISOString(), idle ? null : now.toISOString(), Number(idle), Number(finished),
+      Number(outcome === "retrying"), Number(outcome === "failed")]);
+  }
+
+  workerActivity(): Promise<WorkerActivity[]> {
+    return this.db.query<WorkerActivity>(`
+      SELECT source, to_char(last_tick_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_tick_at,
+        to_char(last_work_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_work_at,
+        ticks::float8, idle_ticks::float8, finished_steps::float8, retrying_steps::float8, failed_steps::float8
+      FROM worker_activity ORDER BY source DESC
+    `);
+  }
 
   async enqueue(event: SupportEvent, now: Date) {
     const payload = JSON.stringify(event);
@@ -94,7 +135,7 @@ export class RunStore {
     return Boolean(saved);
   }
 
-  async fail(job: Job, code: string, transient: boolean, now: Date) {
+  async fail(job: Job, code: string, transient: boolean, now: Date): Promise<"retrying" | "failed" | "stale"> {
     const canRetry = transient && job.attempts < maxAttempts;
     const status = canRetry ? "retrying" : "failed";
     const next = new Date(now.getTime() + (canRetry ? 1000 * 2 ** job.attempts : 0));

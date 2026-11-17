@@ -34,6 +34,10 @@ export function readSettings(env: Record<string, string | undefined> = process.e
   }
   const provider = env.AI_PROVIDER || "rules";
   if (provider !== "rules" && provider !== "openai") throw new Error("Invalid AI provider");
+  const webhookRequests = Number(env.WEBHOOK_REQUESTS_PER_MINUTE ?? 120);
+  if (!Number.isInteger(webhookRequests) || webhookRequests < 1 || webhookRequests > 10_000) {
+    throw new Error("WEBHOOK_REQUESTS_PER_MINUTE must be an integer between 1 and 10000");
+  }
 
   let classify = classifyWithRules;
   if (provider === "openai") {
@@ -64,7 +68,7 @@ export function readSettings(env: Record<string, string | undefined> = process.e
   }
 
   return {
-    demo, operatorToken, webhookSecret, workerToken, provider, connectorFor, actionTarget,
+    demo, operatorToken, webhookSecret, workerToken, provider, connectorFor, actionTarget, webhookRequests,
     classify: demo ? async (event: Parameters<typeof classify>[0], attempt: number) => {
       if (attempt === 1 && event.id.startsWith("demo-retry-")) throw new ClassificationError("demo_transient", true);
       return classify(event, attempt);

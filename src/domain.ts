@@ -38,6 +38,18 @@ export type Status = typeof statuses[number];
 export type ReviewDecision = "approve" | "reject";
 export type RunOperation = "retry" | "cancel";
 export type WorkflowStage = "classify" | "deliver";
+export type WorkerSource = "worker" | "demo";
+export type WorkerOutcome = "idle" | "awaiting_approval" | "completed" | "retrying" | "failed" | "stale";
+export type WorkerActivity = {
+  source: WorkerSource;
+  last_tick_at: string;
+  last_work_at: string | null;
+  ticks: number;
+  idle_ticks: number;
+  finished_steps: number;
+  retrying_steps: number;
+  failed_steps: number;
+};
 
 export const runMessages = {
   accepted: "Support event queued",
@@ -81,7 +93,7 @@ export const maxAttempts = 3;
 export const leaseMs = 60_000;
 
 export class AppError extends Error {
-  constructor(public readonly status: number, public readonly code: string) {
+  constructor(public readonly status: number, public readonly code: string, public readonly retryAfter?: number) {
     super(code);
   }
 }

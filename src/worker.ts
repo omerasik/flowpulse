@@ -1,4 +1,4 @@
-import type { Classification, ClassifierTelemetry, SupportEvent } from "./domain";
+import type { Classification, ClassifierTelemetry, SupportEvent, WorkerOutcome } from "./domain";
 import { DeliveryError } from "./connector";
 import type { NotificationConnector } from "./connector";
 import type { RunStore } from "./store";
@@ -29,7 +29,7 @@ export const classifyWithRules: Classifier = async ({ subject, body }) => {
 
 export async function processNext(
   store: RunStore, classify: Classifier, clock = () => new Date(), connector?: NotificationConnector
-) {
+): Promise<{ status: "idle" } | { id: string; status: Exclude<WorkerOutcome, "idle"> }> {
   const job = await store.claim(clock());
   if (!job) return { status: "idle" as const };
   if (job.stage === "deliver") {

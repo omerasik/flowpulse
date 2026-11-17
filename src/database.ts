@@ -50,6 +50,21 @@ CREATE TABLE IF NOT EXISTS local_deliveries (
   draft text NOT NULL,
   delivered_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS worker_activity (
+  source text PRIMARY KEY CHECK (source IN ('worker', 'demo')),
+  last_tick_at timestamptz NOT NULL,
+  last_work_at timestamptz,
+  ticks bigint NOT NULL,
+  idle_ticks bigint NOT NULL,
+  finished_steps bigint NOT NULL,
+  retrying_steps bigint NOT NULL,
+  failed_steps bigint NOT NULL
+);
+CREATE TABLE IF NOT EXISTS webhook_quota (
+  id integer PRIMARY KEY CHECK (id = 1),
+  minute bigint NOT NULL,
+  requests integer NOT NULL
+);
 CREATE INDEX IF NOT EXISTS runs_ready_idx ON runs (available_at, created_at, id)
   WHERE status IN ('queued', 'retrying');
 CREATE INDEX IF NOT EXISTS runs_lease_idx ON runs (lease_until)

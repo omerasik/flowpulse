@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { runMessages } from "../src/domain";
-import type { Run, Status } from "../src/domain";
+import type { Run, Status, WorkerActivity } from "../src/domain";
 
 type Filter = "all" | "approval" | "failed";
-type Snapshot = { runs: Run[]; demo: boolean; provider: string; actionTarget?: string };
+type Snapshot = { runs: Run[]; activity: WorkerActivity[]; demo: boolean; provider: string; actionTarget?: string };
 
 const statusLabels: Record<Status, string> = {
   queued: "Queued", running: "Running", retrying: "Retry scheduled",
@@ -184,6 +184,14 @@ export function Dashboard({ localDemo }: { localDemo: boolean }) {
               </div>)}
           </div>
           {pricedRuns.length > 0 && <p>Estimated model cost for {pricedRuns.length} recent runs: ${recentCost.toFixed(6)}</p>}
+          <section className="panel worker-activity">
+            <h2>Worker activity</h2>
+            {snapshot.activity.length ? snapshot.activity.map(item => <div key={item.source}>
+              <strong>{item.source === "worker" ? "Worker API" : "Manual demo"}</strong>
+              <span>Last poll <time dateTime={item.last_tick_at}>{day.format(new Date(item.last_tick_at))} · {time.format(new Date(item.last_tick_at))} UTC</time></span>
+              <span>{item.ticks} polls · {item.idle_ticks} idle · {item.finished_steps} finished · {item.retrying_steps} retried · {item.failed_steps} failed</span>
+            </div>) : <p>No worker polls have been recorded.</p>}
+          </section>
           <div className="work-area">
             <section className="panel" aria-label="Runs">
               <header className="panel-header"><div><h2>{filter === "all" ? "Recent runs" : filter === "approval" ? "Approval queue" : "Failed runs"}</h2><p>Newest events first · UTC</p></div><span className="panel-count">{visible.length}</span></header>

@@ -34,7 +34,7 @@ Next.js and React serve the dashboard and REST API. The queue and approval state
 | --- | --- | --- |
 | GET `/api/health` | Public | Application liveness |
 | POST `/api/events` | Timestamped HMAC | 202 with a new run ID, or 200 for a matching replay |
-| GET `/api/runs` | Operator bearer token | Latest 100 runs, provider label and configured delivery destination |
+| GET `/api/runs` | Operator bearer token | Latest 100 runs, persisted worker activity, provider label and delivery destination |
 | GET `/api/runs/{id}` | Operator bearer token | Run status, draft and trace |
 | POST `/api/runs/{id}/decision` | Operator bearer token | Approve or reject a draft. Approval includes the displayed `target` when configured. |
 | POST `/api/runs/{id}/operation` | Operator bearer token | Retry a failed step with `{"operation":"retry"}` or stop pending work with `{"operation":"cancel"}` |
@@ -59,6 +59,7 @@ Send it as `application/json` with `X-FlowPulse-Timestamp` set to Unix time in s
 | --- | --- |
 | `DEMO_MODE` | Enables the sample and loopback demo credentials. Set to `false` on a deployed app. |
 | `OPERATOR_TOKEN`, `WORKER_TOKEN`, `WEBHOOK_SECRET` | Distinct random credentials at least 32 characters long when demo mode is off. |
+| `WEBHOOK_REQUESTS_PER_MINUTE` | Shared per-minute quota for authenticated, valid webhook submissions. Defaults to 120 and returns HTTP 429 with `Retry-After` when exhausted. |
 | `DATABASE_URL` | External PostgreSQL connection URL. |
 | `DATABASE_PATH` | Embedded PostgreSQL path when `DATABASE_URL` is unset. Defaults to `data/flowpulse`. |
 | `AI_PROVIDER` | Defaults to `rules` and makes zero model calls. `openai` opts in to a compatible Chat Completions endpoint. |
@@ -74,6 +75,8 @@ To use Docker Compose, copy the env example and add a URL-safe random `FLOWPULSE
 For Trigger.dev, deploy the app behind HTTPS and set `WORKER_TOKEN` and `FLOWPULSE_URL` in the Trigger.dev environment. Set `TRIGGER_PROJECT_REF` for the CLI and deploy the task with `npx trigger.dev@4.8.5 deploy`. The hourly job claims up to 20 eligible runs and uses the same worker endpoint as the local poller. The hosted schedule and the paid model path require user-provided accounts and credentials.
 
 Model classifications include priority, rationale, a suggested team and a proposed next action for operator review. The dashboard supports subject and event ID search and shows the model, latency, token counts and cost estimate where available. Recent cost totals cover successful, priced classifications from the latest 100 runs. Each estimate applies the configured token rates.
+
+Worker activity reports the last completed poll and cumulative outcomes for the worker endpoint and manual demo. The quota and worker counters persist across app processes using the same PostgreSQL database.
 
 ### Notification receiver
 
