@@ -251,6 +251,33 @@ test("requires role-specific tokens and disables demo routes in deploy mode", as
   assert.throws(() => readSettings({}), /secrets/);
 });
 
+test("fails delivery before sending if the approved destination changes", async () => {
+  const { id } = await store.enqueue(event("destination-change"), clock());
+  await processNext(store, classifyWithRules, clock);
+  await store.decide(id, "approve", clock(), "https://approved.example.test/inbox");
+  let calls = 0;
+  const connector = { target: "https://changed.example.test/inbox", async send() { calls += 1; } };
+  assert.equal((await processNext(store, classifyWithRules, clock, connector)).status, "failed");
+  assert.equal(calls, 0);
+  assert.equal((await store.get(id)).error_code, "delivery_configuration_changed");
+  await store.operate(id, "retry", clock());
+  connector.target = "https://approved.example.test/inbox";
+  assert.equal((await processNext(store, classifyWithRules, clock, connector)).status, "completed");
+  assert.equal(calls, 1);
+});
+
+test("classifies receiver failures without exposing response content", async () => {
+  for (const status of [400, 401, 403, 408, 429, 500, 503]) {
+    const transient = status === 408 || status === 429 || status >= 500;
+    const connector = webhookConnector("https://receiver.example.test", "test-only", async () =>
+      new Response("sensitive receiver error", { status }));
+    await assert.rejects(connector.send({ id: "retry-key", draft: "Approved" }), error =>
+      error instanceof DeliveryError && error.transient === transient &&
+      error.code === (transient ? "delivery_unavailable" : "delivery_rejected") &&
+      !error.message.includes("sensitive"));
+  }
+});
+
 test("only one worker claims a run, a stale lease cannot commit, and rejection persists", async () => {
   const receipt = await store.enqueue(event(), clock());
   const claims = await Promise.all([store.claim(clock()), store.claim(clock())]);
@@ -298,9 +325,22 @@ test("creates a fresh nested database path and preserves runs across reopen", as
     const run = await new RunStore(first).enqueue(event("persisted"), clock()).finally(() => first.close());
     const reopened = await openDatabase({ path });
     try {
-      assert.equal((await new RunStore(reopened).get(run.id)).event_id, "persisted");
+      const durable = new RunStore(reopened);
+      assert.equal((await durable.get(run.id)).event_id, "persisted");
+      await processNext(durable, classifyWithRules, clock);
+      await durable.decide(run.id, "approve", clock(), "Local delivery inbox");
     } finally {
       await reopened.close();
+    }
+    const restarted = await openDatabase({ path });
+    try {
+      const durable = new RunStore(restarted);
+      const connector = { target: "Local delivery inbox", send: (notice: { id: string; draft: string }) => durable.recordLocalDelivery(notice) };
+      assert.equal((await processNext(durable, classifyWithRules, clock, connector)).status, "completed");
+      assert.equal((await processNext(durable, classifyWithRules, clock, connector)).status, "idle");
+      assert.equal((await restarted.query("SELECT run_id FROM local_deliveries")).length, 1);
+    } finally {
+      await restarted.close();
     }
   } finally {
     await rm(directory, { recursive: true, force: true });
